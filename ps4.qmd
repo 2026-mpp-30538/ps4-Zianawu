@@ -1,0 +1,552 @@
+---
+title: "30538 Problem Set 4: Web Scraping"
+author: "Peter Ganong, Maggie Shi, Richard Chen"
+date: "2026-02-01"
+format:
+  pdf: default
+jupyter: python3
+execute:
+  eval: false
+  echo: false
+---
+
+
+**Due 02/07/2026 at 5:00PM Central**
+
+"This submission is my work alone and complies with the 30538 integrity policy." Add your initials to indicate your agreement: Ziyun Wu
+
+### Github Classroom Assignment Setup and Submission Instructions
+
+1.  **Accepting and Setting up the PS4 Assignment Repository**
+    -   Each student must individually accept the repository for the problem set from Github Classroom ("ps4") -- <https://classroom.github.com/a/hWhtcHqH>
+        -   You will be prompted to select your cnetid from the list in order to link your Github account to your cnetid.
+        -   If you can't find your cnetid in the link above, click "continue to next step" and accept the assignment, then add your name, cnetid, and Github account to this Google Sheet and we will manually link it: <https://rb.gy/9u7fb6>
+    -   If you authenticated and linked your Github account to your device, you should be able to clone your PS4 assignment repository locally.
+    -   Contents of PS4 assignment repository:
+        -   `ps4_template.qmd`: this is the Quarto file with the template for the problem set. You will write your answers to the problem set here.
+2.  **Submission Process**:
+    -   Knit your completed solution `ps4.qmd` as a pdf `ps4.pdf`.
+        -   Your submission does not need runnable code. Instead, you will tell us either what code you ran or what output you got.
+    -   To submit, push `ps4.qmd` and `ps4.pdf` to your PS4 assignment repository. Confirm on Github.com that your work was successfully pushed.
+
+### Grading
+- You will be graded on what was last pushed to your PS4 assignment repository before the assignment deadline
+- Problem sets will be graded for completion as: {missing (0%); ✓- (incomplete, 50%); ✓+ (excellent, 100%)}
+    - The percent values assigned to each problem denote how long we estimate the problem will take as a share of total time spent on the problem set, not the points they are associated with.
+- In order for your submission to be considered complete, you need to push both your `ps4.qmd` and `ps4.pdf` to your repository. Submissions that do not include both files will automatically receive 50% credit.
+
+
+\newpage
+
+## (40%) Step 1: Develop initial scraper and crawler
+**Scraping**: Go to the first page of the HHS OIG’s ["Enforcement Actions" page](https://oig.hhs.gov/fraud/enforcement/) and scrape and collect the following into a dataset:
+    * Title of the enforcement action
+    * Date
+    * Category (e.g, "Criminal and Civil Actions")
+    * Link associated with the enforcement action
+
+Collect your output into a tidy dataframe and print its `head`.
+```{python}
+#| eval: true
+#| echo: false
+#| warning: true
+#| message: true
+
+
+import re
+import requests
+import pandas as pd
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+
+# Step 1: Download the first page
+url = "https://oig.hhs.gov/fraud/enforcement/?action-details-date=all&type=criminal-and-civil-actions#results"
+resp = requests.get(url, timeout=30)
+resp.raise_for_status()
+soup = BeautifulSoup(resp.text, "html.parser")
+
+# Step 2: Focus on the results section only
+results = soup.select_one("#results")
+if results is None:
+    results = soup
+
+# Step 3: Find each action entry by its title link
+title_links = results.select("h2 a")
+
+# Date pattern like "January 30, 2026"
+date_pat = re.compile(
+    r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}"
+)
+
+data = []
+
+for a in title_links:
+    title = a.get_text(strip=True)
+    link = urljoin(url, a.get("href", ""))
+
+    container = a.find_parent(["li", "article", "div"])
+    if container is None:
+        continue
+
+    time_tag = container.find("time")
+    if time_tag:
+        date = time_tag.get_text(strip=True)
+    else:
+        m = date_pat.search(container.get_text(" ", strip=True))
+        date = m.group(0) if m else None
+
+    raw_text = container.get_text("\n", strip=True).split("\n")
+    raw_text = [t.strip() for t in raw_text if t.strip()]
+    raw_text = [t for t in raw_text if t != title]
+    if date is not None:
+        raw_text = [t for t in raw_text if t != date]
+
+    categories = [t for t in raw_text if len(t) <= 60]
+    category = " | ".join(categories) if categories else None
+
+    data.append({"title": title, "date": date, "category": category, "link": link})
+
+df = pd.DataFrame(data)
+df.head()
+
+
+
+```
+
+*Hint*: if you go to James A. Robinson's profile page at the Nobel Prize website [here](https://www.nobelprize.org/prizes/economic-sciences/2024/robinson/facts/), right-click anywhere along the line "Affiliation at the time of the award: University of Chicago, Chicago, IL, USA", and select Inspect, you'll see that this affiliation information is located at the third `<p>` tag out of five `<p>` tags under the `<div class="content">`. Think about how you can select the third element of `<p>` out of five `<p>` elements so you're sure you scrape the affiliation information, not other. This way, you can scrape the name of agency to answer this question.
+
+## (40%) Step 2: Making the scraper dynamic
+1. **Turning the scraper into a function**: You will write a function that takes as input a month and a year, and then pulls and formats the enforcement actions like in Step 1 starting from that month+year to today.
+    
+    * It is *very important* to make sure that you include an indicator whether or not to actually run the function. If you do not include an indicator, then each time you try to knit the qmd file, the scraper will run, and it will take a very long time to compile your pdf. Instead, run the function once to create a file called enforcement_actions_year_month.csv, which you can use in subsequent parts of the pset. Then turn the indicator off so that knitting your qmd file goes smoothly.
+    * This function should first check that the year inputted >= 2013 before starting to scrape. If the year inputted < 2013, it should print a statement reminding the user to restrict to year >= 2013, since only enforcement actions after 2013 are listed.
+    * It should save the dataframe output into a .csv file named as "enforcement_actions_
+    *year*_*month*.csv" (do not commit this file to git)
+    * If you're crawling multiple pages, always add 1 second wait before going to the next page to prevent potential server-side block. To implement this in Python, you may look up `.sleep()` function from `time` library.
+
+  a. Before writing out your function, write down pseudo-code of the steps that your function will go through. If you use a loop, discuss what kind of loop you will use and how you will define it. *Hint: Note that a simple `for` loop may not be sufficient for what this crawler requires. Use online resources to look into different types of loops or different ways of using `for` loops to see if there is something that is more appropriate for this task.*
+
+1.Define a function scrape_enforcement_actions(start_year, start_month, run_scraper, out_dir, sleep_seconds)
+
+2.If start_year < 2013, print a reminder and return None.
+
+3.Create start_date as the first day of start_year-start_month
+
+4.Define output CSV name
+enforcement_actions_{start_year}_{start_month:02d}.csv
+
+5.If run_scraper is False:
+     If the CSV exists, load it and return it 
+     Otherwise, print a message that the file does not exist and return None.
+    
+6.Initialize:
+     page = 0
+     rows = []
+
+7.While True
+    Build URL for the current page:
+       If page == 0, use the base URL(no page parameter)
+       Else, use ?page = {page}
+    Download HTML and parse with BeautifulSoup.
+    Find all title links in the results list (e.g., h2 a).
+   
+    For each title link:
+
+        Find the parent container element for this entry.
+        Extract: title text, href link, date string, category tags.Convert date string to a datetime.    
+        If date >= start_date, append the row to rows.
+        Else, stop processing further entries and stop crawling (because pages are sorted by date descending).       
+    If we reached older-than-start_date OR the page has no entries, break the loop.
+    Sleep 1 second, then increment page += 1.
+
+8.Convert rows to a DataFrame.
+
+9.Save DataFrame to CSV in out_dir (do not commit).
+
+10.Return the DataFrame.
+
+  b. Now code up your dynamic scraper and run it to start collecting the enforcement actions since January 2024. How many enforcement actions do you get in your final dataframe? What is the date and details of the earliest enforcement action it scraped?
+
+
+
+```{python}
+#| eval: true
+#| echo: false
+#| warning: false
+#| message: false
+
+import os
+import time
+import re
+from urllib.parse import urljoin
+
+import requests
+import pandas as pd
+from bs4 import BeautifulSoup
+
+
+def scrape_enforcement_actions(
+    start_year: int,
+    start_month: int,
+    run_scraper: bool = True,
+    out_dir: str = ".",
+    sleep_seconds: float = 1.0,
+) -> pd.DataFrame | None:
+    """
+    Scrape HHS OIG "Enforcement Actions" from (start_year, start_month) to today.
+
+    Required behaviors (per pset):
+    - Validate year >= 2013 (otherwise print reminder and stop)
+    - Use a run indicator to avoid scraping during every Quarto knit
+    - Save output to enforcement_actions_{year}_{month}.csv (do NOT commit)
+    - Sleep before going to the next page
+
+    Returns:
+        DataFrame with columns: title, date, category, link
+        or None if invalid input / cached file missing when run_scraper=False.
+    """
+
+    # -------------------------
+    # 0) Input validation
+    # -------------------------
+    if start_year < 2013:
+        print("Please restrict to year >= 2013, since only enforcement actions after 2013 are listed.")
+        return None
+
+    if not (1 <= start_month <= 12):
+        raise ValueError("start_month must be between 1 and 12.")
+
+    start_date = pd.Timestamp(start_year, start_month, 1)
+
+    # Output file path (do NOT commit this csv to git)
+    csv_name = f"enforcement_actions_{start_year}_{start_month:02d}.csv"
+    csv_path = os.path.join(out_dir, csv_name)
+
+    # -------------------------
+    # 1) Run indicator behavior
+    # -------------------------
+    if not run_scraper:
+        if os.path.exists(csv_path):
+            return pd.read_csv(csv_path)
+        print(f"Cached file not found: {csv_path}. Set run_scraper=True to create it.")
+        return None
+
+    # -------------------------
+    # 2) Scrape pages until we hit earlier-than-start_date
+    # -------------------------
+    base_url = "https://oig.hhs.gov/fraud/enforcement/"
+
+    date_re = re.compile(
+        r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}"
+    )
+
+    session = requests.Session()
+    session.headers.update(
+        {
+            "User-Agent": "Mozilla/5.0 (compatible; UChicago-30538-scraper/1.0; +https://oig.hhs.gov/)"
+        }
+    )
+
+    rows = []
+    page = 0
+    reached_earlier = False
+
+    while True:
+        url = base_url if page == 0 else f"{base_url}?page={page}"
+
+        resp = session.get(url, timeout=30)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        title_links = soup.select("h2 a")
+        if len(title_links) == 0:
+            break
+
+        for a in title_links:
+            title = a.get_text(strip=True)
+            link = urljoin(base_url, a.get("href", ""))
+
+            container = a.find_parent("li")
+            if container is None:
+                container = a.find_parent("div")
+            if container is None:
+                continue
+
+            pieces = [t.strip() for t in container.stripped_strings if t.strip()]
+            pieces_wo_title = [t for t in pieces if t != title]
+
+            joined = " ".join(pieces_wo_title)
+            m = date_re.search(joined)
+            if not m:
+                continue
+
+            date_str = m.group(0)
+            date_dt = pd.to_datetime(date_str)
+
+            if date_dt < start_date:
+                reached_earlier = True
+                break
+
+            categories = []
+            for t in pieces_wo_title:
+                if t == date_str:
+                    continue
+                if len(t) <= 80 and not date_re.search(t):
+                    categories.append(t)
+
+            seen = set()
+            categories = [c for c in categories if not (c in seen or seen.add(c))]
+            category_str = " | ".join(categories) if categories else None
+
+            rows.append(
+                {"title": title, "date": date_str, "category": category_str, "link": link}
+            )
+
+        if reached_earlier:
+            break
+
+        time.sleep(sleep_seconds)
+        page += 1
+
+    df = pd.DataFrame(rows)
+    df.to_csv(csv_path, index=False)
+    return df
+
+
+```
+  c. Now, let's go a little further back. Test your code by collecting the actions since January 2022. *Note that this can take a while.* How many enforcement actions do you get in your final dataframe? What is the date and details of the earliest enforcement action it scraped?  Use the dataframe from this process for every question after this.
+
+  *Hint*: 
+  
+    If you go to the next page in this HHS OIG's "Enforcement Actions" page, you'll notice a pattern:
+
+      * Second page URL: https://oig.hhs.gov/fraud/enforcement/?page=2
+      * Third page URL: https://oig.hhs.gov/fraud/enforcement/?page=3
+      * and so on ...
+```{python}
+#| eval: true
+#| echo: false
+#| warning: true
+#| message: true
+
+# -----------------------------
+# Step 2(c): Run scraper since Jan 2022 and report required outputs
+# -----------------------------
+
+RUN_SCRAPER = False  
+
+df_2022 = scrape_enforcement_actions(
+    start_year=2022,
+    start_month=1,
+    run_scraper=RUN_SCRAPER,
+    out_dir=".",
+    sleep_seconds=1.0
+)
+
+
+if df_2022 is None:
+    df_2022 = pd.read_csv("enforcement_actions_2022_01.csv")
+
+# 1) How many enforcement actions?
+n_actions = len(df_2022)
+print("Number of enforcement actions since Jan 2022:", n_actions)
+
+# 2) Earliest enforcement action (date + details)
+df_2022["date_dt"] = pd.to_datetime(df_2022["date"], errors="coerce")
+df_sorted = df_2022.sort_values("date_dt", ascending=True)
+
+earliest = df_sorted.iloc[0][["date", "title", "category", "link"]]
+
+print("Earliest enforcement action scraped (since Jan 2022):")
+print(f"Date: {earliest['date']}")
+print(f"Title: {earliest['title']}")
+print(f"Category: {earliest['category']}")
+print(f"Link: {earliest['link']}")
+
+# Save a clean version (without helper column) for later steps
+df_2022.drop(columns=["date_dt"]).to_csv("enforcement_actions_2022_01.csv", index=False)
+print("Saved CSV: enforcement_actions_2022_01.csv")
+
+
+```
+
+## (20%) Step 3: Plot data based on scraped data
+
+*Note*: To complete this part of the pset, reference the csv file you created in step 2, enforcement_actions_year_month.csv.
+
+1. Plot a line chart with altair that shows: **the number of enforcement actions** over time (aggregated to each month+year) overall since January 2022,
+```{python}
+#| eval: true
+#| echo: false
+#| warning: false
+#| message: false
+
+import pandas as pd
+import altair as alt
+
+# Read the CSV created in Step 2
+df = pd.read_csv("enforcement_actions_2022_01.csv")
+
+# Convert date column to datetime
+df["date"] = pd.to_datetime(df["date"], errors="coerce")
+
+# Create a year-month column (month bucket)
+df["year_month"] = df["date"].dt.to_period("M").dt.to_timestamp()
+
+# Count actions per month
+monthly_counts = (
+    df.groupby("year_month")
+      .size()
+      .reset_index(name="n_actions")
+      .sort_values("year_month")
+)
+
+# Build chart
+chart = (
+    alt.Chart(monthly_counts)
+      .mark_line(point=True)
+      .encode(
+          x=alt.X("year_month:T", title="Month"),
+          y=alt.Y("n_actions:Q", title="Number of Enforcement Actions"),
+          tooltip=[
+              alt.Tooltip("year_month:T", title="Month"),
+              alt.Tooltip("n_actions:Q", title="Actions")
+          ]
+      )
+      .properties(
+          title="Number of HHS OIG Enforcement Actions per Month (Since January 2022)",
+          width=650,
+          height=380
+      )
+)
+chart
+# Save for PDF embedding
+chart.save("chart_overall.png", engine="vl-convert", scale_factor=2)
+
+```
+![](chart_overall.png){width=90%}
+
+2. Plot a line chart with altair that shows: **the number of enforcement actions** split out by:
+
+    * "Criminal and Civil Actions" vs. "State Enforcement Agencies"
+    * Five topics in the "Criminal and Civil Actions" category: "Health Care Fraud", "Financial Fraud", "Drug Enforcement", "Bribery/Corruption", and "Other". *Hint: You will need to divide the five topics manually by looking at the title and assigning the relevant topic. For example, if you find the word "bank" or "financial" in the title of an action, then that action should probably belong to "Financial Fraud" topic. We suggest using AI to identify patterns in your scraped data and suggest ways of classifying based on the titles.*
+
+```{python}
+#| eval: true
+#| echo: false
+#| warning: false
+#| message: false
+
+import pandas as pd
+import altair as alt
+
+# Load the CSV created in Step 2 (update filename if needed)
+df = pd.read_csv("enforcement_actions_2022_01.csv")
+
+# If your scraper produced "categories" instead of "category", normalize it
+if "category" not in df.columns and "categories" in df.columns:
+    df["category"] = df["categories"]
+
+# Parse date and create a month bucket
+df["date"] = pd.to_datetime(df["date"], errors="coerce")
+df["year_month"] = df["date"].dt.to_period("M").dt.to_timestamp()
+
+# Helpful: make sure title is string
+df["title"] = df["title"].astype(str)
+df["category"] = df["category"].astype(str)
+
+# Create a high-level group label based on category text
+df["group"] = "Other/Unknown"
+df.loc[df["category"].str.contains("Criminal and Civil Actions", case=False, na=False), "group"] = "Criminal and Civil Actions"
+df.loc[df["category"].str.contains("State Enforcement Agencies", case=False, na=False), "group"] = "State Enforcement Agencies"
+
+# Aggregate counts by month and group
+monthly_group = (
+    df.groupby(["year_month", "group"])
+      .size()
+      .reset_index(name="n_actions")
+)
+
+chart_group =(alt.Chart(monthly_group).mark_line(point=True).encode(
+    x=alt.X("year_month:T", title="Month"),
+    y=alt.Y("n_actions:Q", title="Number of Enforcement Actions"),
+    color=alt.Color("group:N", title="Enforcement Type"),
+    tooltip=[
+        alt.Tooltip("year_month:T", title="Month"),
+        alt.Tooltip("group:N", title="Type"),
+        alt.Tooltip("n_actions:Q", title="Actions")
+    ]
+).properties(
+    title="Monthly Enforcement Actions by Type (Since Jan 2022)",
+    width=650,
+    height=380
+))
+
+chart_group
+
+cca = df[df["category"].str.contains("Criminal and Civil Actions", case=False, na=False)].copy()
+
+import re
+
+def classify_topic(title: str) -> str:
+    """
+    Classify a Criminal and Civil Action into one of five topics based on keywords in the title.
+    This is a simple rule-based approach using string matching.
+    """
+    t = title.lower()
+
+    # Bribery / Corruption
+    if any(k in t for k in ["bribery", "kickback", "anti-kickback", "corrupt", "corruption", "bid rig", "gratuity"]):
+        return "Bribery/Corruption"
+
+    # Financial Fraud
+    if any(k in t for k in ["bank", "financial", "securities", "wire fraud", "money laundering", "launder", "tax fraud", "investment", "identity theft"]):
+        return "Financial Fraud"
+
+    # Drug Enforcement
+    if any(k in t for k in ["drug", "opioid", "fentanyl", "controlled substance", "prescription", "pill", "pharmacy", "distributing", "distribution"]):
+        return "Drug Enforcement"
+
+    # Health Care Fraud
+    if any(k in t for k in ["medicare", "medicaid", "health care fraud", "healthcare fraud", "false claims", "fca", "billing", "home health", "hospital", "clinic", "physician", "chiropractor", "nurse"]):
+        return "Health Care Fraud"
+
+    # Everything else
+    return "Other"
+
+cca["topic"] = cca["title"].apply(classify_topic)
+
+monthly_topic = (
+    cca.groupby(["year_month", "topic"])
+       .size()
+       .reset_index(name="n_actions")
+)
+
+# enforce a consistent topic order in the legend
+topic_order = ["Health Care Fraud", "Financial Fraud", "Drug Enforcement", "Bribery/Corruption", "Other"]
+
+chart_topic = (alt.Chart(monthly_topic).mark_line(point=True).encode(
+    x=alt.X("year_month:T", title="Month"),
+    y=alt.Y("n_actions:Q", title="Number of Criminal & Civil Actions"),
+    color=alt.Color("topic:N", title="Topic", sort=topic_order),
+    tooltip=[
+        alt.Tooltip("year_month:T", title="Month"),
+        alt.Tooltip("topic:N", title="Topic"),
+        alt.Tooltip("n_actions:Q", title="Actions")
+    ]
+).properties(
+    title="Monthly Criminal & Civil Actions by Topic (Since Jan 2022)",
+    width=650,
+    height=380
+))
+
+chart_topic
+
+# Save both charts for PDF embedding (stable)
+chart_group.save("chart_group.png", engine="vl-convert", scale_factor=2)
+chart_topic.save("chart_topic.png", engine="vl-convert", scale_factor=2)
+
+```
+![](chart_group.png){width=90%}
+
+![](chart_topic.png){width=90%}
